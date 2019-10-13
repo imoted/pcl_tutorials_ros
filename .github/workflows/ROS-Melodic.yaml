@@ -21,14 +21,22 @@ jobs:
                   mkdir -p ~/catkin_ws/src
                   cd ~/catkin_ws/src
                   git clone https://github.com/ShotaAk/pcl_tutorials_ros
+                  cd pcl_tutorials_ros/samples
+                  ./download.sh
             - name: Install dependencies
               run: |
                   source /opt/ros/melodic/setup.bash
                   cd ~/catkin_ws/src
                   rosdep install -r -y --from-paths . --ignore-src
-            - name: Build paclages
+            - name: Build packages
               run: |
                   source /opt/ros/melodic/setup.bash
                   cd ~/catkin_ws
                   catkin_make
-                  source ~/catkin_ws/devel/setup.bash
+                  source devel/setup.bash
+            - name: Run tests
+              run: |
+                  source /opt/ros/melodic/setup.bash
+                  cd ~/catkin_ws
+                  source devel/setup.bash
+                  catkin_make run_tests
