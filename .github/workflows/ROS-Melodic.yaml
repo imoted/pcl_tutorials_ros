@@ -38,5 +38,5 @@ jobs:
               run: |
                   source /opt/ros/melodic/setup.bash
                   cd ~/catkin_ws
-                  source devel/setup.bash
+                  catkin_make
                   catkin_make run_tests
