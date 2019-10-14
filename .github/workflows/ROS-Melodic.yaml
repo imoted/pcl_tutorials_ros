@@ -28,10 +28,13 @@ jobs:
                   source /opt/ros/melodic/setup.bash
                   cd ~/catkin_ws/src
                   rosdep install -r -y --from-paths . --ignore-src
-            - name: Build and Test packages
+            - name: Build packages
               run: |
                   source /opt/ros/melodic/setup.bash
                   cd ~/catkin_ws
                   catkin_make
-                  source devel/setup.bash
+            - name: Test packages
+              run: |
+                  source /opt/ros/melodic/setup.bash
+                  source ~/catkin_ws/devel/setup.bash
                   rostest pcl_tutorials_ros test_example.launch example:=filtering number:=0 use_file:=true file:=table_scene_lms400.pcd
