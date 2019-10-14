@@ -38,3 +38,4 @@ jobs:
                   source /opt/ros/melodic/setup.bash
                   source ~/catkin_ws/devel/setup.bash
                   rostest pcl_tutorials_ros test_example.launch example:=filtering number:=0 use_file:=true file:=table_scene_lms400.pcd
+              shell: bash
