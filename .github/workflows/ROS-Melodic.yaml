@@ -34,4 +34,4 @@ jobs:
                   cd ~/catkin_ws
                   catkin_make
                   source devel/setup.bash
-                  rostest pcl_tutorials_ros test_example.test example:=filtering number:=0 use_file:=true file:=table_scene_lms400.pcd
+                  rostest pcl_tutorials_ros test_example.launch example:=filtering number:=0 use_file:=true file:=table_scene_lms400.pcd
