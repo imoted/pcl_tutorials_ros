@@ -16,6 +16,7 @@ jobs:
                   sudo rosdep init
                   rosdep update
                   source /opt/ros/melodic/setup.bash
+                  sudo apt install python-rosinstall python-rosinstall-generator python-wstool build-essential
             - name: Clone repository
               run: |
                   mkdir -p ~/catkin_ws/src
@@ -37,8 +38,4 @@ jobs:
               run: |
                   source /opt/ros/melodic/setup.bash
                   source ~/catkin_ws/devel/setup.bash
-                  cd ~/catkin_ws
-                  ls
-                  ls devel
-                  echo $ROS_PACKAGE_PATH
                   rostest pcl_tutorials_ros test_example.launch example:=filtering number:=0 use_file:=true file:=table_scene_lms400.pcd
