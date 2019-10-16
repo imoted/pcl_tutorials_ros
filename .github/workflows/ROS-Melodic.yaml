@@ -30,18 +30,23 @@ jobs:
                   cd ~/catkin_ws/src
                   rosdep install -r -y --from-paths . --ignore-src
             - name: Build packages
-              run: |
-                  source /opt/ros/melodic/setup.bash
-                  cd ~/catkin_ws
-                  catkin_make
-            - name: Test packages
               env:
                   ROS_HOSTNAME: localhost
                   ROS_MASTER_URI: http://localhost:11311
               run: |
                   source /opt/ros/melodic/setup.bash
-                  source ~/catkin_ws/devel/setup.bash
-                  rospack list | grep pcl
-                  env | grep ROS
-                  roslaunch pcl_tutorials_ros example.launch
-                  rostest pcl_tutorials_ros test_example.launch example:=filtering number:=0 use_file:=true file:=table_scene_lms400.pcd
+                  cd ~/catkin_ws
+                  catkin_make
+                  source devel/setup.bash
+                  catkin_make run_tests
+            # - name: Test packages
+            #   env:
+            #       ROS_HOSTNAME: localhost
+            #       ROS_MASTER_URI: http://localhost:11311
+            #   run: |
+            #       source /opt/ros/melodic/setup.bash
+            #       source ~/catkin_ws/devel/setup.bash
+            #       rospack list | grep pcl
+            #       env | grep ROS
+            #       roslaunch pcl_tutorials_ros example.launch
+            #       rostest pcl_tutorials_ros test_example.test example:=filtering number:=0 use_file:=true file:=table_scene_lms400.pcd

@@ -28,5 +28,5 @@ target_link_libraries(segmentation
 
 if(CATKIN_ENABLE_TESTING)
     find_package(rostest REQUIRED)
-    add_rostest(launch/test_example.test ARGS example:=filtering number:=0 use_file:=true file:=table_scene_lms400.pcd)
+    add_rostest(test/test_example.test ARGS example:=filtering number:=0 use_file:=true file:=table_scene_lms400.pcd)
 endif()
