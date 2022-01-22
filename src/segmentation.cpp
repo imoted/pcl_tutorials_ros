@@ -19,9 +19,11 @@
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/segmentation/extract_clusters.h>
 
-
+// グローバル変数宣言に static 修飾子を付けると、その識別子がそれを記述したファイルでのみ有効になる
+// ローカル変数に static を付けた効果は「スコープを抜けても変数の値がそのまま保持される」
 static ros::Publisher PubOutput;
 static int ExampleNumber;
+static float cluster_tolerance;
 
 void tf_broadcast(const std::string frame_id){
     static tf2_ros::TransformBroadcaster br;
@@ -43,8 +45,7 @@ void tf_broadcast(const std::string frame_id){
 
 void plane(const sensor_msgs::PointCloud2ConstPtr& cloud_msg, const std::string frame_id){
     // PassThrough Filtering
-    // Ref: http://www.pointclouds.org/documentation/tutorials/passthrough.php#passthrough
-    // Ref: http://wiki.ros.org/perception_pcl/Tutorials
+    // https://pcl.readthedocs.io/projects/tutorials/en/master/planar_segmentation.html#planar-segmentation
 
     // Convert the sensor_msgs/PointCloud2 data to pcl/PointCloud
     // Use pcl::PointXYZRGB to visualize segmentation.
@@ -62,8 +63,8 @@ void plane(const sensor_msgs::PointCloud2ConstPtr& cloud_msg, const std::string 
     seg.setMethodType (pcl::SAC_RANSAC);
     seg.setDistanceThreshold (0.01);
     
-    seg.setInputCloud (cloud.makeShared());
-    seg.segment (*inliers, *coefficients);
+    seg.setInputCloud (cloud.makeShared());  // shared_ptr オブジェクトを構築する。
+    seg.segment (*inliers, *coefficients);   // インライアを出力
 
     if (inliers->indices.size () == 0)
     {
@@ -72,8 +73,8 @@ void plane(const sensor_msgs::PointCloud2ConstPtr& cloud_msg, const std::string 
     }
 
     for (size_t i = 0; i < inliers->indices.size (); ++i){
-        cloud.points[inliers->indices[i]].r = 255;
-        cloud.points[inliers->indices[i]].g = 0;
+        cloud.points[inliers->indices[i]].r = 0;  // cloudのinliersのindex listで示された配列の変数を255に変更
+        cloud.points[inliers->indices[i]].g = 255;
         cloud.points[inliers->indices[i]].b = 0;
     }
 
@@ -86,10 +87,23 @@ void plane(const sensor_msgs::PointCloud2ConstPtr& cloud_msg, const std::string 
 }
 
 void euclideanClusterExtraction(const sensor_msgs::PointCloud2ConstPtr& cloud_msg, const std::string frame_id){
-    // Euclidean Cluster Extraction
+    // Euclidean Cluster Extraction  ユークリッドクラスター抽出
+    // クラスタリング手法は、未整理の点群モデルをより小さなパーツに分割し、全体の処理時間を大幅に短縮する必要がある。
+    // ユークリッド的な意味での簡単なデータクラスタリングは、固定幅のボックスを用いた空間の3次元グリッド細分化、
+    // より一般的にはオクツリーデータ構造を利用することで実現できる。
+    // https://ja.wikipedia.org/wiki/%E5%85%AB%E5%88%86%E6%9C%A8
+    // この特殊な表現は非常に高速に構築でき、占有空間の容積表現が必要な場合や、結果として得られる各3Dボックス（またはオクトリーリーフ）
+    // のデータが別の構造で近似できる場合に有用である。
+
+    // しかし、より一般的な意味では、最近傍を利用し、本質的にフラッドフィル(塗りつぶし)アルゴリズムに類似したクラスタリング手法を実装することができる。
+
+    // 表とその上にオブジェクトが乗っている点群が与えられたとしよう。
+    // 我々は、平面上に横たわる個々のオブジェクトの点群を見つけて、セグメント化したい。
+    // 近傍探索にKd-tree構造を使用すると仮定すると、そのためのアルゴリズムステップは次のようになります（[RusuDissertation]より）。
+
     // Ref: http://www.pointclouds.org/documentation/tutorials/cluster_extraction.php#cluster-extraction
     
-    enum COLOR_RGB{
+    enum COLOR_RGB{  // 列挙型の変数 GREEN = 1, BLUE = 2, RED = 3
         RED=0,
         GREEN,
         BLUE,
@@ -151,17 +165,33 @@ void euclideanClusterExtraction(const sensor_msgs::PointCloud2ConstPtr& cloud_ms
     }
 
     // Creating the KdTree object for the search method of the extraction
+    // ここでは、抽出アルゴリズムの検索方法として、KdTreeオブジェクトを作成しています。
     pcl::search::KdTree<pcl::PointXYZRGB>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZRGB>());
     tree->setInputCloud (cloud_filtered);
 
     std::vector<pcl::PointIndices> cluster_indices;
+    // ここでは、実際のインデックス情報をvector<int>で表したPointIndicesのベクトルを作成しています。検出された各クラスタのインデックスがここに保存される。
+    // cluster_indices は、検出された各クラスタの PointIndices のインスタンスを 1 つ含むベクトルであるという事実に注意してほしい。
+    // つまり、cluster_indices[0]には、点群における最初のクラスタのすべてのインデックスが格納されます。
     pcl::EuclideanClusterExtraction<pcl::PointXYZRGB> ec;
-    ec.setClusterTolerance (0.02); // 2cm
+    ec.setClusterTolerance (cluster_tolerance); // 2cm
     ec.setMinClusterSize (100);
     ec.setMaxClusterSize (25000);
     ec.setSearchMethod (tree);
     ec.setInputCloud (cloud_filtered);
     ec.extract (cluster_indices);
+    // ここでは、点群がPointXYZ型であるため、PointXYZ型のEuclideanClusterExtractionオブジェクトを作成しています。
+    // また、抽出のためのパラメータと変数を設定しています。
+    // setClusterTolerance()に正しい値を設定することに注意してください。
+    // あまり小さい値をとると、実際のオブジェクトが複数のクラスタとして見えてしまうことがあります。
+    // 一方、値を大きくしすぎると、複数のオブジェクトがひとつのクラスタとして見えてしまうことがあります。
+    // そのため、どの値が自分のデータセットに合っているかをテストして試してみることをお勧めします。
+
+    // 発見されたクラスタは少なくともsetMinClusterSize()ポイント、最大setMaxClusterSize()ポイントを持たなければならないと課している。
+
+    // ここで、点群からクラスターを抽出し、そのインデックスをcluster_indicesに保存しました。
+    // vector<PointIndices>から各クラスタを分離するには、cluster_indicesを繰り返し、
+    // エントリごとに新しいPointCloudを作成し、現在のクラスタのすべてのポイントをPointCloudに書き込む必要があります。
 
     int cluster_i=0;
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_output (new pcl::PointCloud<pcl::PointXYZRGB>());
@@ -226,6 +256,7 @@ int main (int argc, char** argv)
     ros::NodeHandle nh("~");
 
     nh.param<int>("number", ExampleNumber, 0);
+    nh.param<float>("cluster_tolerance", cluster_tolerance, 0.02);
 
     // Create a ROS subscriber for the input point cloud
     ros::Subscriber sub = nh.subscribe("/camera/depth_registered/points", 1, cloud_cb);

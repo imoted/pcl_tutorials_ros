@@ -5,6 +5,7 @@
   <arg name="gazebo" default="false" />
   <arg name="use_file" default="false" />
   <arg name="file" default="" />
+  <arg name="cluster_tolerance" default="0.015"/>
 
   <group if="$(arg realsense)">
     <include file="$(find pcl_tutorials_ros)/launch/realsense.launch" />
@@ -32,6 +33,7 @@
 
   <node name="pcl_example" pkg="pcl_tutorials_ros" type="$(arg example)" output="screen">
     <param name="number" value="$(arg number)" />
+    <param name="cluster_tolerance" value="$(arg cluster_tolerance)" />
   </node>
 
   <node name="rviz" pkg="rviz" type="rviz" respawn="false" 
