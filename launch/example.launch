@@ -8,7 +8,12 @@
   <arg name="cluster_tolerance" default="0.015"/>
 
   <group if="$(arg realsense)">
-    <include file="$(find pcl_tutorials_ros)/launch/realsense.launch" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="camera_link_broadcaster" 
+      args="0 0 0.44 0 0.75 1.57 camera_link camera_diagonal_link" />
+    <!-- http://wiki.ros.org/ja/tf -->
+    <include file="$(find pcl_tutorials_ros)/launch/realsense.launch" >
+      <arg name="tf_prefix" value="/camera_diagonal" />
+    </include>
   </group>
 
   <group if="$(arg gazebo)">
@@ -34,6 +39,7 @@
   <node name="pcl_example" pkg="pcl_tutorials_ros" type="$(arg example)" output="screen">
     <param name="number" value="$(arg number)" />
     <param name="cluster_tolerance" value="$(arg cluster_tolerance)" />
+    <param name="input_frame" value="camera_diagonal_depth_optical_frame"/>
   </node>
 
   <node name="rviz" pkg="rviz" type="rviz" respawn="false" 
