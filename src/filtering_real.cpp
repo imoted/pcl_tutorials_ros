@@ -1,11 +1,16 @@
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <nav_msgs/OccupancyGrid.h>
 #include <geometry_msgs/TransformStamped.h>
-#include <tf2_ros/transform_listener.h>
 
-#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 #include <tf2_ros/transform_broadcaster.h>
-#include <geometry_msgs/TransformStamped.h>
+#include <tf2_sensor_msgs/tf2_sensor_msgs.h>
+
+#include <tf2/transform_datatypes.h>
+#include <tf2/LinearMath/Quaternion.h>
+
 // PCL specific includes
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
@@ -19,11 +24,17 @@
 
 #include <pcl/segmentation/sac_segmentation.h>
 
+#include <pcl_ros/transforms.h>
+
 
 static ros::Publisher PubOutput;
+static ros::Publisher test_pub;
+static ros::Publisher map_pub;
 static int ExampleNumber;
 static std::string input_frame_id;
 static std::string output_frame_id;
+
+tf2_ros::Buffer tfBuffer;
 
 void tf_broadcast(const std::string frame_id){
     static tf2_ros::TransformBroadcaster br;
@@ -41,8 +52,8 @@ void tf_broadcast(const std::string frame_id){
     transformStamped.transform.rotation.y = q.y();
     transformStamped.transform.rotation.z = q.z();
     transformStamped.transform.rotation.w = q.w();
-    // tf2_ros::Buffer tfBuffer;
-    // tf2_ros::TransformListener tfListener(tfBuffer);
+    br.sendTransform(transformStamped);
+
     // geometry_msgs::TransformStamped transform_from_base_link;
     // try{
     //     // ros::Time now = ros::Time::now();
@@ -55,13 +66,6 @@ void tf_broadcast(const std::string frame_id){
     // catch (tf2::TransformException &ex) {
     //   ROS_WARN("%s",ex.what());
     // }
-
-    // transformStamped.transform.rotation.x = transform_from_base_link.transform.rotation.x;
-    // transformStamped.transform.rotation.y = transform_from_base_link.transform.rotation.y;
-    // transformStamped.transform.rotation.z = transform_from_base_link.transform.rotation.z;
-    // transformStamped.transform.rotation.w = transform_from_base_link.transform.rotation.w;
-
-    br.sendTransform(transformStamped);
 }
 
 void passThrough(const sensor_msgs::PointCloud2ConstPtr& cloud_msg, const std::string frame_id){
@@ -292,6 +296,195 @@ void extractIndices(const sensor_msgs::PointCloud2ConstPtr& cloud_msg, const std
     PubOutput.publish(output);
 }
 
+void tf_transform_and_merge(const sensor_msgs::PointCloud2ConstPtr& cloud_msg, const std::string frame_id){
+    pcl::PCLPointCloud2::Ptr cloud (new pcl::PCLPointCloud2);
+    pcl::PCLPointCloud2 *cloud_filtered = new pcl::PCLPointCloud2;
+    pcl_conversions::toPCL(*cloud_msg, *cloud);
+
+    pcl::VoxelGrid<pcl::PCLPointCloud2> sor;
+    sor.setInputCloud(cloud);
+    double leaf_size = 0.01;
+    sor.setLeafSize(leaf_size, leaf_size, leaf_size);  // org 0.1, 0.1, 0.1
+    sor.filter(*cloud_filtered);
+
+    sensor_msgs::PointCloud2* output = new sensor_msgs::PointCloud2;
+    pcl_conversions::moveFromPCL(*cloud_filtered, *output);
+    output->header.frame_id = frame_id;
+
+    sensor_msgs::PointCloud2 global_frame_cloud;
+    // このROS nodeでexample_frameのtf publishをしているが、それでは、example_frameを読むことができずに下記は落ちていた。
+    // そのため、static_transform_publisherにて、今は、example_frameを出すことにしている。
+    tfBuffer.transform(*output, global_frame_cloud, "camera_link");
+    // PubOutput.publish(transformed_cloud);
+
+    //  heap 領域で行うには、後から。　まずはスタック領域でやってみる。
+    // sensor_msgs::PointCloud2 *obstacle_cloud = new sensor_msgs::PointCloud2;
+    // *obstacle_cloud = global_frame_cloud;
+
+    // 以下完全に同じアドレスとなる ダメ。
+    // 0x7ffee1fa53c0   0x7ffee1fa53c0
+    // sensor_msgs::PointCloud2& obstacle_cloud = global_frame_cloud;
+    // std::cout << &obstacle_cloud << "   " << &global_frame_cloud << std::endl;
+
+    // obstacle_cloud->height = global_frame_cloud.height;
+    // obstacle_cloud->width = global_frame_cloud.width;
+    // obstacle_cloud->fields = global_frame_cloud.fields;
+    // obstacle_cloud->is_bigendian = global_frame_cloud.is_bigendian;
+    // obstacle_cloud->point_step = global_frame_cloud.point_step;
+    // obstacle_cloud->row_step = global_frame_cloud.row_step;
+    // obstacle_cloud->is_dense = global_frame_cloud.is_dense;
+    // obstacle_cloud->header.frame_id = global_frame_cloud.header.frame_id;
+    // obstacle_cloud->header.stamp = global_frame_cloud.header.stamp;
+    // obstacle_cloud->data = global_frame_cloud.data;
+
+    // まずはスタック領域でやってみる。
+    sensor_msgs::PointCloud2 obstacle_cloud = global_frame_cloud;
+    // 両方共 camera_link
+    // std::cout << obstacle_cloud.header.frame_id << "    " << global_frame_cloud.header.frame_id << std::endl;
+
+    // unsigned int cloud_size = global_frame_cloud.height*global_frame_cloud.width;
+    sensor_msgs::PointCloud2Modifier modifier(obstacle_cloud);
+    // modifier.resize(cloud_size);  // The number of T's to change the size of the original sensor_msgs::PointCloud2 by
+    unsigned int point_count = 0;
+
+    // copy over the points that are within our height bounds
+    float max_obstacle_height_ = 10;
+    float min_obstacle_height_ = 0.005;
+    // sensor_msgs::PointCloud2Iterator<float> iter_z(global_frame_cloud, "z");
+    sensor_msgs::PointCloud2Iterator<float> iter_x(global_frame_cloud, "x");
+    sensor_msgs::PointCloud2Iterator<float> iter_z_obs(obstacle_cloud, "z");
+    sensor_msgs::PointCloud2Iterator<uint8_t> iter_rgb(obstacle_cloud, "rgb");
+    // for (auto i = 0; i < 10; ++i, ++iter_rgb){
+    //     std::cout << "iter_rgb_obs address: " << &*iter_rgb << std::endl;
+    // }
+
+    nav_msgs::OccupancyGrid obstacle_map;
+    obstacle_map.header.frame_id = "map_link";
+    obstacle_map.header.stamp = ros::Time::now();
+    obstacle_map.info.width = 100;
+    obstacle_map.info.height = 100;
+    obstacle_map.info.resolution = leaf_size;
+    for (uint64_t i = 0; i < obstacle_map.info.width * obstacle_map.info.height; ++i){
+        obstacle_map.data.push_back(0);
+        // std::cout << obstacle_map.data[i] << std::endl;
+    }
+
+    std::vector<unsigned char>::const_iterator iter_global = global_frame_cloud.data.begin(), iter_global_end = global_frame_cloud.data.end();
+    // std::vector<unsigned char>::iterator iter_obs = observation_cloud.data.begin();
+    std::vector<unsigned char>::iterator iter_obstacle = obstacle_cloud.data.begin();
+    for (; iter_global != iter_global_end; ++iter_x, ++iter_z_obs, iter_global += global_frame_cloud.point_step)
+    { 
+    // std::cout << "iter_z address: " << &*iter_z << std::endl;
+    // std::cout << "iter_z_obs address: " << &*iter_z_obs << std::endl;
+    // std::cout << "iter_rgb_obs address: " << &*iter_rgb << std::endl;   // このアドレス表示はうまくいかがないが、問題無さそう。
+    //   std::cout << "iter_z: " << (float)*iter_z << std::endl;
+      if (*(iter_x + 2) <= max_obstacle_height_ && *(iter_x + 2) >= min_obstacle_height_)
+      {
+        // std::cout << "iter_z: " << (float)*iter_z_obs << std::endl;
+        // iter_globalからiter_global + global_frame_cloud.point_step　までを iter_obsからのアドレスにコピー
+        std::copy(iter_global, iter_global + global_frame_cloud.point_step, iter_obstacle);
+
+        // iter_z_obs[0] = 0;  // カメラに近い領域のものだけは、ある一定の高さの物は、 zが０に変換された。
+
+        // マイナス方向にはデータは無いようだ。
+        // if(iter_x[0] < 0){
+        //     std::cout << "iter_x: " << (float)*iter_x << std::endl;
+        // }
+        // if(iter_x[1] < 0){
+        //     std::cout << "iter_y: " << (float)*(iter_x + 1) << std::endl;
+        // }
+
+        // std::cout << "axis x : " << iter_x[0] << "   axis y :" << iter_x[1] << std::endl;
+
+        // 以下は上手く言ってない気がする。
+        // iter_rgb[0] = 0;
+        // iter_rgb[1] = 0;
+        // iter_rgb[2] = 0;
+        // std::cout << "iter_z: " << (float)*iter_z_obs << std::endl;
+        iter_obstacle += global_frame_cloud.point_step;
+        ++point_count;
+      }
+    }
+
+    // for DEBUG
+    // float max_obstacle_height_ = 1;
+    // float min_obstacle_height_ = 0.1;
+    // sensor_msgs::PointCloud2Iterator<float> iter_z(global_frame_cloud, "z");
+    // sensor_msgs::PointCloud2Iterator<uint8_t> iter_rgb(global_frame_cloud, "rgb");
+    // std::vector<unsigned char>::const_iterator iter_global = global_frame_cloud.data.begin(), iter_global_end = global_frame_cloud.data.end();
+    // for (; iter_global != iter_global_end; ++iter_z, ++iter_rgb, iter_global += global_frame_cloud.point_step)
+    // {
+    // // std::cout << "iter_z address: " << &*iter_z << std::endl;
+    // // std::cout << "iter_rgb_obs address: " << &*iter_rgb << std::endl;   // こちらもアドレスはおかしいが、データには下記でアクセスはしっかりできている。。。
+    //   if ((*iter_z) <= max_obstacle_height_ && (*iter_z) >= min_obstacle_height_)
+    //   {
+    //     // 以下 OK
+    //     iter_z[0] = 2;
+
+    //     // 以下OK
+    //     // iter_rgb[0] = 0;
+    //     // iter_rgb[1] = 0;
+    //     // iter_rgb[2] = 0;
+
+    //     // iter_obstacle += global_frame_cloud.point_step;
+    //     // ++point_count;
+    //   }
+    // }
+
+
+
+    // for DEBUG
+    // std::cout << "global_frame_cloud point_step" << global_frame_cloud.point_step << std::endl;
+    // std::cout << "global_frame_cloud row_step" << global_frame_cloud.row_step << std::endl;
+    // std::cout << "global_frame_cloud height" << global_frame_cloud.height << std::endl;
+    // std::cout << "global_frame_cloud width" << global_frame_cloud.width << std::endl;
+    // std::cout << "global_frame_cloud data size" << global_frame_cloud.data.size() << std::endl;
+    // std::cout << "global_frame_cloud data" << global_frame_cloud.data[0] << std::endl;
+
+    // std::cout << "obstacle point_step" << obstacle_cloud.point_step << std::endl;
+    // std::cout << "obstacle row_step" << obstacle_cloud.row_step << std::endl;
+    // std::cout << "obstacle height" << obstacle_cloud.height << std::endl;
+    // std::cout << "obstacle width" << obstacle_cloud.width << std::endl;
+    // std::cout << "obstacle data size" << obstacle_cloud.data.size() << std::endl;
+    // std::cout << "obstacle data" << obstacle_cloud.data[0] << std::endl;
+
+    // observation_cloud.header.stamp = cloud.header.stamp;
+    // observation_cloud.header.frame_id = global_frame_cloud.header.frame_id;
+    // PubOutput.publish(observation_cloud);
+
+    modifier.resize(point_count);
+    PubOutput.publish(obstacle_cloud);
+    // PubOutput.publish(global_frame_cloud);
+
+    map_pub.publish(obstacle_map);
+
+    delete cloud_filtered;
+    delete output;
+
+    // TODO : ld errorが起きる。  
+    // ld errorは解消。includeが足りなかった。
+    // TODO2 : "moved_link"が見えなくて、落ちる。
+    // 原因は単純　tfListner  を、毎回callbackのたびに宣言していては、tfを読めない。
+
+    // TODO 入力の型が違うらしい
+    // sensor_msgs::PointCloud2 transformed_cloud;
+    // pcl_ros::transformPointCloud(frame_id, output, transformed_cloud, tfListener);
+    // PubOutput.publish(transformed_cloud);
+
+    // TODO こちらもエラー transform のエラー
+    // geometry_msgs::PointStamped global_origin;
+    // geometry_msgs::PointStamped local_origin;
+    // local_origin.header.stamp = ros::Time::now();
+    // local_origin.header.frame_id = "camera_link";
+    // local_origin.point.x = 0;
+    // local_origin.point.y = 0;
+    // local_origin.point.z = 0;
+    // tfBuffer.transform(local_origin, global_origin, frame_id);
+    // test_pub.publish(global_origin);
+
+}
+
+
 void cloud_cb (const sensor_msgs::PointCloud2ConstPtr& cloud_msg)
 {
     const static std::string EXAMPLE_FRAME_ID = "example_frame";
@@ -312,12 +505,15 @@ void cloud_cb (const sensor_msgs::PointCloud2ConstPtr& cloud_msg)
     case 4:
         extractIndices(cloud_msg, output_frame_id);
         break;
+    case 5:
+        tf_transform_and_merge(cloud_msg, output_frame_id);
+        break;
     default:
         break;
     }
 
     // to shift positions of rendering point clouds
-    tf_broadcast(output_frame_id);
+    // tf_broadcast(output_frame_id);
 }
 
 int main (int argc, char** argv)
@@ -327,7 +523,7 @@ int main (int argc, char** argv)
     ros::NodeHandle nh("~");
 
     nh.param<int>("number", ExampleNumber, 0);
-    nh.param<std::string>("input_frame", input_frame_id, "camera_depth_optical_frame");
+    nh.param<std::string>("input_frame", input_frame_id, "camera_diagonal_depth_optical_frame");
     nh.param<std::string>("output_frame", output_frame_id, "example_frame");
 
     // Create a ROS subscriber for the input point cloud
@@ -335,6 +531,9 @@ int main (int argc, char** argv)
 
     // Create a ROS publisher for the output point cloud
     PubOutput = nh.advertise<sensor_msgs::PointCloud2> ("/output", 1);
+    test_pub = nh.advertise<geometry_msgs::PointStamped> ("/test", 1);
+    map_pub = nh.advertise<nav_msgs::OccupancyGrid> ("/obstacle_map", 1);
+    tf2_ros::TransformListener tfListener(tfBuffer);
 
     ros::spin ();
 }

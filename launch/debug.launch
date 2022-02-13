@@ -1,7 +1,7 @@
 <launch>
-  <arg name="example" default="filtering" />
-  <arg name="number" default="0" />
-  <arg name="realsense" default="false" />
+  <arg name="example" default="filtering_real" />
+  <arg name="number" default="5" />
+  <arg name="realsense" default="true" />
   <arg name="gazebo" default="false" />
   <arg name="use_file" default="false" />
   <arg name="file" default="" />
@@ -19,6 +19,8 @@
       <arg name="tf_prefix" value="camera_diagonal" />
     </include>
   </group>
+
+  <node pkg="pcl_tutorials_ros" type="test.py" name="test_python" output="screen" />
 
   <group if="$(arg gazebo)">
     <include file="$(find pcl_tutorials_ros)/launch/gazebo.launch" />
@@ -48,4 +50,6 @@
 
   <node name="rviz" pkg="rviz" type="rviz" respawn="false" 
     args="-d $(find pcl_tutorials_ros)/launch/config.rviz" output="screen" />
+
+
 </launch>
